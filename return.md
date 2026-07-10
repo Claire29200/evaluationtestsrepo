@@ -110,18 +110,44 @@ Points relevés en revue manuelle du `client/Dockerfile` :
 
 Proposition : figer les tags (`node:24-slim`, `nginx:1.31-alpine`), utiliser `npm ci`, et envisager `nginxinc/nginx-unprivileged` pour l'étage final.
 
+## SonarQube — résultats réels (exécuté avec Docker Desktop + `@sonar/scan`)
+
+Analyse lancée localement (SonarQube Community Build en conteneur Docker) via le scanner officiel `@sonar/scan`, en s'appuyant sur `sonar-project.properties` et les rapports de couverture LCOV générés par `npm run test:coverage` (server + client).
+
+| Métrique | Résultat |
+|---|---|
+| **Quality Gate** | **Passed** |
+| Lignes de code analysées | 314 |
+| Sécurité | 4 problèmes ouverts (note **D**) |
+| Fiabilité | 0 problème (note **A**) |
+| Maintenabilité | 2 problèmes (note **A**) |
+| Couverture de code | 75,7 % (131 lignes à couvrir) |
+| Duplication de code | 0,0 % |
+
+**Les 4 problèmes de sécurité relevés** — ils recoupent et confirment de manière indépendante les points déjà identifiés manuellement dans ce document :
+
+| Fichier | Sévérité | Problème |
+|---|---|---|
+| `server/Dockerfile` | High | `COPY . .` copie récursivement le contexte de build, risque d'inclure des données sensibles dans l'image |
+| `server/app.js` | Medium | `cors()` activé sans restriction d'origine — **confirme le point 5** ci-dessous |
+| `server/Dockerfile` | Low | L'image `node` tourne avec l'utilisateur `root` par défaut — **confirme la revue Docker Scout** ci-dessus |
+| `server/app.js` | Low | Express expose implicitement sa version via le header `X-Powered-By` par défaut |
+
+→ Le dernier point (header `X-Powered-By`) est une trouvaille supplémentaire, non identifiée lors de la revue manuelle initiale : Express ajoute ce header par défaut, ce qui facilite le fingerprinting technique de l'application par un attaquant. Correctif simple : `app.disable("x-powered-by")` dans `server/app.js`, ou utiliser le middleware `helmet`.
+
 ## Propositions d'amélioration sur l'application
 
 1. **Validation des entrées côté API** : `addCD` insère directement `title`, `artist`, `year` sans valider leur présence/type. Un `title`/`artist` manquant ou un `year` non numérique remonte une erreur 500 générique (violation de contrainte `NOT NULL` ou erreur de type PostgreSQL) au lieu d'un 400 explicite. Une validation (ex. `express-validator` ou vérification manuelle) donnerait des messages d'erreur plus clairs au frontend.
 2. **Gestion des erreurs trop permissive** : les trois handlers du contrôleur renvoient `error.message` brut au client (`res.status(500).json({ error: error.message })`), ce qui peut exposer des détails internes (structure de requêtes SQL, etc.). Préférer un message générique côté client et logguer le détail côté serveur.
 3. **UX du frontend** : `Home.jsx` recharge toute la page (`window.location.reload()`) après l'ajout d'un CD au lieu de simplement rafraîchir la liste comme le fait déjà `CDList` après une suppression. Cela casse l'expérience utilisateur (flash de la page) et complique les tests E2E. Il serait plus cohérent de faire remonter un callback de rafraîchissement local, comme pour la suppression.
 4. **`id` en paramètre d'URL non validé** : `deleteCD` utilise `req.params.id` directement dans la requête paramétrée (donc pas d'injection SQL), mais un `id` non numérique retourne aussi un 500 plutôt qu'un 400/404. Un CD inexistant ne renvoie pas non plus de 404 (la suppression "réussit" silencieusement même si 0 ligne est affectée).
-5. **Configuration/sécurité** : `cors()` est utilisé sans restriction d'origine (`app.use(cors())`), ce qui autorise n'importe quel domaine à appeler l'API. À restreindre à l'origine du frontend en production.
+5. **Configuration/sécurité** : `cors()` est utilisé sans restriction d'origine (`app.use(cors())`), ce qui autorise n'importe quel domaine à appeler l'API. À restreindre à l'origine du frontend en production. *(confirmé indépendamment par SonarQube — sévérité Medium)*
 6. **Fichiers `.env`** : `server/.env` et `client/.env` sont vides/factices ici mais suivis par git (aucun des deux n'est dans un `.gitignore`). Il serait préférable de fournir un `.env.example` documenté et d'ignorer les vrais fichiers `.env`.
 7. **Images Docker de base non figées** (`node:lts`, `postgres:latest`, `nginx:latest`) : confirmé en pratique par l'incident PostgreSQL documenté ci-dessus et par les recommandations Docker Scout sur le backend. Figer des tags précis (`node:24-slim`, `postgres:16-alpine`, `nginx:1.31-alpine`) réduit à la fois la surface de vulnérabilités et le risque de rupture inattendue lors d'un simple `docker compose up --build`.
+8. **Fingerprinting du framework** : Express expose son header `X-Powered-By` par défaut, révélant la technologie backend utilisée. *(relevé par SonarQube — sévérité Low)*. Correctif simple : `app.disable("x-powered-by")` dans `server/app.js`.
 
 ## Points bonus — état final
 
-- **SonarQube** : configuration (`sonar-project.properties`) et rapports de couverture (LCOV) prêts et vérifiés (100 % de couverture sur le code testé, backend et frontend).
-- **Docker Scout** : ✅ exécuté réellement (voir résultats détaillés ci-dessus) — 352 vulnérabilités identifiées côté backend avec recommandation concrète et chiffrée (`node:24-slim`/`node:26-slim`, -313 MB, -422 packages, -18 vulnérabilités HIGH), et 115 vulnérabilités côté frontend (image déjà optimale, aucun changement de tag recommandé à ce jour).
+- **SonarQube** : exécuté réellement (Quality Gate **Passed**, 314 lignes analysées, 75,7 % de couverture, 0 % de duplication, 4 issues de sécurité identifiées et recoupées avec les autres analyses — voir résultats détaillés ci-dessus).
+- **Docker Scout** : exécuté réellement (voir résultats détaillés ci-dessus) — 352 vulnérabilités identifiées côté backend avec recommandation concrète et chiffrée (`node:24-slim`/`node:26-slim`, -313 MB, -422 packages, -18 vulnérabilités HIGH), et 115 vulnérabilités côté frontend (image déjà optimale, aucun changement de tag recommandé à ce jour).
 - **OWASP ZAP** : script prêt (`security/zap-baseline.sh`) contre le frontend et l'API démarrés.
