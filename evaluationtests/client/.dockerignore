@@ -1,0 +1,8 @@
+node_modules
+npm-debug.log
+dist
+coverage
+src/components/__tests__
+src/services/__tests__
+.env
+.git

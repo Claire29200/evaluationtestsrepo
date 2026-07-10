@@ -1,0 +1,13 @@
+{
+  "name": "sujet-cd-audio-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tests end-to-end (Cypress) pour l'application de gestion de CD Audio",
+  "scripts": {
+    "cypress:open": "cypress open",
+    "test:e2e": "cypress run"
+  },
+  "devDependencies": {
+    "cypress": "^14.2.0"
+  }
+}
